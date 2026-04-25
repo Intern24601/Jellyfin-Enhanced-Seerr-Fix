@@ -247,6 +247,33 @@ namespace Jellyfin.Plugin.JellyfinEnhanced.Services
             return null;
         }
 
+        // Helper method to extract ID from a JSON element (handles both string and integer)
+        private int? TryExtractIdFromJsonElement(JsonElement element)
+        {
+            try
+            {
+                // Try to parse as integer first
+                if (element.ValueKind == JsonValueKind.Number)
+                {
+                    return element.GetInt32();
+                }
+                // Try to parse as string
+                else if (element.ValueKind == JsonValueKind.String)
+                {
+                    var str = element.GetString();
+                    if (!string.IsNullOrEmpty(str) && int.TryParse(str, out var id))
+                    {
+                        return id;
+                    }
+                }
+            }
+            catch
+            {
+                // Silent fail
+            }
+            return null;
+        }
+
         // Gets next movie in collection from Jellyseerr collection endpoint
         private async Task<MovieInfo?> GetNextMovieInCollectionAsync(int collectionId, string currentTmdbId)
         {
@@ -262,6 +289,13 @@ namespace Jellyfin.Plugin.JellyfinEnhanced.Services
                 var httpClient = _httpClientFactory.CreateClient();
                 httpClient.DefaultRequestHeaders.Clear();
                 httpClient.DefaultRequestHeaders.Add("X-Api-Key", config.JellyseerrApiKey);
+
+                // Normalize the current TMDB ID for comparison
+                var normalizedCurrentId = currentTmdbId?.Trim();
+                if (string.IsNullOrEmpty(normalizedCurrentId))
+                {
+                    return null;
+                }
 
                 foreach (var url in urls)
                 {
@@ -292,10 +326,14 @@ namespace Jellyfin.Plugin.JellyfinEnhanced.Services
                                 for (int i = 0; i < parts.Count; i++)
                                 {
                                     var part = parts[i];
-                                    if (part.TryGetProperty("id", out var idProp) && idProp.GetInt32().ToString() == currentTmdbId)
+                                    if (part.TryGetProperty("id", out var idProp))
                                     {
-                                        currentIndex = i;
-                                        break;
+                                        var extractedId = TryExtractIdFromJsonElement(idProp);
+                                        if (extractedId != null && extractedId.ToString() == normalizedCurrentId)
+                                        {
+                                            currentIndex = i;
+                                            break;
+                                        }
                                     }
                                 }
 
@@ -337,11 +375,15 @@ namespace Jellyfin.Plugin.JellyfinEnhanced.Services
                                     if (nextPart.TryGetProperty("id", out var nextIdProp) &&
                                         nextPart.TryGetProperty("title", out var titleProp))
                                     {
-                                        return new MovieInfo
+                                        var nextMovieId = TryExtractIdFromJsonElement(nextIdProp);
+                                        if (nextMovieId != null)
                                         {
-                                            TmdbId = nextIdProp.GetInt32(),
-                                            Title = titleProp.GetString() ?? "Unknown Title"
-                                        };
+                                            return new MovieInfo
+                                            {
+                                                TmdbId = nextMovieId.Value,
+                                                Title = titleProp.GetString() ?? "Unknown Title"
+                                            };
+                                        }
                                     }
                                 }
                                 else
